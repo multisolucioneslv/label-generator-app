@@ -230,10 +230,16 @@ class LabelGeneratorApp:
                              bg="white", fg="#5f6368", font=("Segoe UI", 10, "bold"))
         addr_label.pack(anchor="w", pady=(0, 5))
 
-        addr_entry = tk.Entry(fields_frame, **entry_style)
+        # Container for address field and dropdown
+        addr_container = tk.Frame(fields_frame, bg="white")
+        addr_container.pack(fill="x", pady=(0, 15))
+
+        addr_entry = tk.Entry(addr_container, **entry_style)
         self.add_placeholder(addr_entry, "Calle, número, colonia...")
-        self.add_address_autocomplete(addr_entry, form_type)
-        addr_entry.pack(fill="x", ipady=10, pady=(0, 15))
+        addr_entry.pack(fill="x", ipady=10)
+
+        # Store references for autocomplete
+        setattr(addr_entry, 'form_fields', {})
 
         # Ubicación
         loc_label = tk.Label(fields_frame, text="📍 Ubicación",
@@ -255,6 +261,9 @@ class LabelGeneratorApp:
         self.add_placeholder(city_entry, "Ciudad")
         city_entry.pack(fill="x", ipady=8)
 
+        # Store reference for autocomplete
+        addr_entry.form_fields['city'] = city_entry
+
         # Estado
         state_frame = tk.Frame(location_frame, bg="white")
         state_frame.pack(side="left", fill="x", expand=True, padx=(4, 4))
@@ -266,6 +275,9 @@ class LabelGeneratorApp:
         self.add_placeholder(state_entry, "Estado")
         state_entry.pack(fill="x", ipady=8)
 
+        # Store reference for autocomplete
+        addr_entry.form_fields['state'] = state_entry
+
         # ZIP
         zip_frame = tk.Frame(location_frame, bg="white")
         zip_frame.pack(side="left", fill="x", expand=True, padx=(8, 0))
@@ -276,6 +288,12 @@ class LabelGeneratorApp:
         zip_entry = tk.Entry(zip_frame, **entry_style)
         self.add_placeholder(zip_entry, "00000")
         zip_entry.pack(fill="x", ipady=8)
+
+        # Store reference for autocomplete
+        addr_entry.form_fields['zip'] = zip_entry
+
+        # Add autocomplete after all fields are created
+        self.add_address_autocomplete(addr_entry, addr_container, form_type)
 
         # Campo de tracking solo para destinatario
         tracking_entry = None
@@ -300,109 +318,239 @@ class LabelGeneratorApp:
         if tracking_entry:
             self.form_fields[form_type]['tracking'] = tracking_entry
 
-    def add_address_autocomplete(self, entry, form_type):
-        """Add Google Places autocomplete to address field"""
+    def add_address_autocomplete(self, entry, container, form_type):
+        """Add Google Places autocomplete with visible dropdown"""
         if not self.gmaps:
             return
 
+        # Create dropdown frame
+        dropdown_frame = tk.Frame(container, bg="white", relief="solid", bd=1)
+        dropdown_frame.pack(fill="x", pady=(2, 0))
+        dropdown_frame.pack_forget()  # Hide initially
+
+        # Store dropdown reference
+        entry.dropdown_frame = dropdown_frame
+        entry.suggestions = []
+
         def on_key_release(event):
-            if len(entry.get()) > 3 and not entry.placeholder_active:
-                threading.Thread(target=self.fetch_suggestions,
-                               args=(entry, entry.get()), daemon=True).start()
+            if len(entry.get()) > 3 and not getattr(entry, 'placeholder_active', False):
+                threading.Thread(target=self.fetch_suggestions_with_dropdown,
+                               args=(entry,), daemon=True).start()
+            else:
+                self.hide_dropdown(entry)
+
+        def on_focus_out(event):
+            # Hide dropdown when clicking outside (with small delay)
+            self.root.after(100, lambda: self.hide_dropdown(entry))
 
         entry.bind('<KeyRelease>', on_key_release)
+        entry.bind('<FocusOut>', on_focus_out)
 
-    def fetch_suggestions(self, entry, query):
-        """Fetch address suggestions from Google Places API"""
+    def fetch_suggestions_with_dropdown(self, entry):
+        """Fetch address suggestions and show in dropdown"""
         try:
+            query = entry.get().strip()
+            if len(query) < 3 or getattr(entry, 'placeholder_active', False):
+                self.hide_dropdown(entry)
+                return
+
             if self.gmaps and config.GOOGLE_API_ENABLED:
                 # Get selected country
                 country_name = db_manager.get_setting('default_country', 'USA')
                 country_code = self.get_country_code(country_name)
 
-                # Use geocoding API which is more reliable than places_autocomplete
                 try:
-                    # First try with geocoding for better compatibility
+                    # Use geocoding API
                     results = self.gmaps.geocode(
                         address=query + f", {country_name}",
-                        language='es',
+                        language='en',
                         region=country_code
                     )
 
                     if results:
+                        # Process results to get structured data
                         suggestions = []
                         for result in results[:5]:  # Limit to 5 suggestions
-                            formatted_address = result.get('formatted_address', '')
-                            if formatted_address:
-                                suggestions.append(formatted_address)
+                            suggestion_data = self.parse_address_components(result)
+                            if suggestion_data:
+                                suggestions.append(suggestion_data)
 
                         if suggestions:
-                            print(f"Sugerencias para '{query}':")
-                            for i, suggestion in enumerate(suggestions, 1):
-                                print(f"  {i}. {suggestion}")
-
-                            # Show suggestions in a simple way for now
-                            self.show_address_suggestions(entry, suggestions)
+                            # Update on main thread
+                            self.root.after(0, lambda: self.show_dropdown_suggestions(entry, suggestions))
+                        else:
+                            self.root.after(0, lambda: self.hide_dropdown(entry))
+                    else:
+                        self.root.after(0, lambda: self.hide_dropdown(entry))
 
                 except Exception as api_error:
-                    if "REQUEST_DENIED" in str(api_error):
-                        print("Google API Error: Verifica tu API Key y configuración")
-                        print("Asegúrate de haber habilitado Geocoding API")
-                    elif "OVER_QUERY_LIMIT" in str(api_error):
-                        print("Límite de consultas excedido")
-                    else:
-                        print(f"Error de API: {api_error}")
+                    print(f"Error de API: {api_error}")
+                    self.root.after(0, lambda: self.hide_dropdown(entry))
 
         except Exception as e:
             print(f"Error general: {str(e)}")
 
-    def show_address_suggestions(self, entry, suggestions):
-        """Show address suggestions in a simple dropdown-like manner"""
+    def parse_address_components(self, result):
+        """Parse Google API result into structured address data"""
         try:
-            if suggestions and len(suggestions) > 0:
-                current_text = entry.get().strip()
+            formatted_address = result.get('formatted_address', '')
+            components = result.get('address_components', [])
 
-                # Don't autocomplete if text is too short or placeholder is active
-                if hasattr(entry, 'placeholder_active') and entry.placeholder_active:
-                    return
-                if len(current_text) < 3:
-                    return
+            address_data = {
+                'formatted_address': formatted_address,
+                'street_address': '',
+                'city': '',
+                'state': '',
+                'zip_code': '',
+                'country': ''
+            }
 
-                # Find the best suggestion that starts with or contains the current text
-                best_suggestion = None
-                for suggestion in suggestions:
-                    # Clean the suggestion by removing country suffix
-                    clean_suggestion = suggestion
+            for component in components:
+                types = component.get('types', [])
+                long_name = component.get('long_name', '')
+                short_name = component.get('short_name', '')
 
-                    # Remove various country suffixes
-                    country_suffixes = [", USA", ", Mexico", ", Guatemala", ", El Salvador", ", Honduras", ", Bolivia"]
-                    for suffix in country_suffixes:
-                        if suffix in clean_suggestion:
-                            clean_suggestion = clean_suggestion.split(suffix)[0]
+                if 'street_number' in types or 'route' in types:
+                    if address_data['street_address']:
+                        address_data['street_address'] += ' ' + long_name
+                    else:
+                        address_data['street_address'] = long_name
+                elif 'locality' in types or 'administrative_area_level_2' in types:
+                    address_data['city'] = long_name
+                elif 'administrative_area_level_1' in types:
+                    address_data['state'] = short_name
+                elif 'postal_code' in types:
+                    address_data['zip_code'] = long_name
+                elif 'country' in types:
+                    address_data['country'] = long_name
 
-                    # Check if this suggestion is relevant to what user typed
-                    if (current_text.lower() in clean_suggestion.lower() or
-                        clean_suggestion.lower().startswith(current_text.lower())):
-                        best_suggestion = clean_suggestion
-                        break
-
-                # Only suggest if we found a good match and it's significantly longer
-                if (best_suggestion and
-                    len(best_suggestion) > len(current_text) + 5 and  # At least 5 chars longer
-                    not best_suggestion.lower() == current_text.lower()):
-
-                    # Don't replace if the suggestion is just a country name
-                    country_names = ["USA", "United States", "Mexico", "Guatemala", "El Salvador", "Honduras", "Bolivia"]
-                    if any(country.lower() in best_suggestion.lower() and len(best_suggestion) < 30 for country in country_names):
-                        return
-
-                    # Suggest completion by extending current text
-                    entry.delete(0, tk.END)
-                    entry.insert(0, best_suggestion)
-                    entry.selection_range(len(current_text), tk.END)
+            return address_data
 
         except Exception as e:
-            print(f"Error showing suggestions: {e}")
+            print(f"Error parsing address: {e}")
+            return None
+
+    def show_dropdown_suggestions(self, entry, suggestions):
+        """Show dropdown with address suggestions"""
+        try:
+            # Clear existing dropdown
+            for widget in entry.dropdown_frame.winfo_children():
+                widget.destroy()
+
+            if not suggestions:
+                self.hide_dropdown(entry)
+                return
+
+            # Store suggestions
+            entry.suggestions = suggestions
+
+            # Create suggestion buttons
+            for i, suggestion in enumerate(suggestions):
+                btn_text = suggestion['formatted_address']
+                # Limit text length for display
+                if len(btn_text) > 60:
+                    btn_text = btn_text[:57] + "..."
+
+                btn = tk.Button(
+                    entry.dropdown_frame,
+                    text=btn_text,
+                    bg="white",
+                    fg="#2c3e50",
+                    font=("Segoe UI", 10),
+                    relief="flat",
+                    anchor="w",
+                    padx=10,
+                    pady=5,
+                    command=lambda idx=i: self.select_suggestion(entry, idx)
+                )
+                btn.pack(fill="x", pady=1)
+
+                # Hover effects
+                def on_enter(e, button=btn):
+                    button.config(bg="#f0f8ff")
+
+                def on_leave(e, button=btn):
+                    button.config(bg="white")
+
+                btn.bind("<Enter>", on_enter)
+                btn.bind("<Leave>", on_leave)
+
+            # Show dropdown
+            entry.dropdown_frame.pack(fill="x", pady=(2, 0))
+
+        except Exception as e:
+            print(f"Error showing dropdown: {e}")
+
+    def hide_dropdown(self, entry):
+        """Hide the dropdown suggestions"""
+        try:
+            if hasattr(entry, 'dropdown_frame'):
+                entry.dropdown_frame.pack_forget()
+        except Exception as e:
+            print(f"Error hiding dropdown: {e}")
+
+    def select_suggestion(self, entry, index):
+        """Handle suggestion selection"""
+        try:
+            if not hasattr(entry, 'suggestions') or index >= len(entry.suggestions):
+                return
+
+            suggestion = entry.suggestions[index]
+
+            # Fill address field
+            if suggestion['street_address']:
+                entry.delete(0, tk.END)
+                entry.insert(0, suggestion['street_address'])
+            else:
+                # Fallback to formatted address
+                clean_address = suggestion['formatted_address']
+                # Remove country suffix for cleaner display
+                country_suffixes = [", USA", ", United States", ", Mexico", ", Guatemala", ", El Salvador", ", Honduras", ", Bolivia"]
+                for suffix in country_suffixes:
+                    if suffix in clean_address:
+                        clean_address = clean_address.split(suffix)[0]
+                        break
+                entry.delete(0, tk.END)
+                entry.insert(0, clean_address)
+
+            # Auto-fill other fields
+            if hasattr(entry, 'form_fields'):
+                # Fill city
+                if 'city' in entry.form_fields and suggestion['city']:
+                    city_entry = entry.form_fields['city']
+                    self.clear_placeholder(city_entry)
+                    city_entry.delete(0, tk.END)
+                    city_entry.insert(0, suggestion['city'])
+
+                # Fill state
+                if 'state' in entry.form_fields and suggestion['state']:
+                    state_entry = entry.form_fields['state']
+                    self.clear_placeholder(state_entry)
+                    state_entry.delete(0, tk.END)
+                    state_entry.insert(0, suggestion['state'])
+
+                # Fill ZIP
+                if 'zip' in entry.form_fields and suggestion['zip_code']:
+                    zip_entry = entry.form_fields['zip']
+                    self.clear_placeholder(zip_entry)
+                    zip_entry.delete(0, tk.END)
+                    zip_entry.insert(0, suggestion['zip_code'])
+
+            # Hide dropdown
+            self.hide_dropdown(entry)
+
+        except Exception as e:
+            print(f"Error selecting suggestion: {e}")
+
+    def clear_placeholder(self, entry):
+        """Clear placeholder from entry field"""
+        try:
+            if hasattr(entry, 'placeholder_active') and entry.placeholder_active:
+                entry.delete(0, tk.END)
+                entry.config(fg='#2c3e50')
+                entry.placeholder_active = False
+        except Exception as e:
+            print(f"Error clearing placeholder: {e}")
 
     def add_placeholder(self, entry, placeholder_text):
         """Agregar placeholder animado a un Entry"""
