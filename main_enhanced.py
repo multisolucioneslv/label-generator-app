@@ -359,23 +359,47 @@ class LabelGeneratorApp:
     def show_address_suggestions(self, entry, suggestions):
         """Show address suggestions in a simple dropdown-like manner"""
         try:
-            # For now, we'll use the first suggestion to auto-fill
             if suggestions and len(suggestions) > 0:
-                # Clear current text and insert first suggestion
-                current_text = entry.get()
-                if not entry.placeholder_active and len(current_text) > 3:
-                    # Use the most relevant suggestion
-                    best_suggestion = suggestions[0]
+                current_text = entry.get().strip()
 
-                    # Extract just the main address part (before the country)
-                    if ", Mexico" in best_suggestion:
-                        best_suggestion = best_suggestion.split(", Mexico")[0]
+                # Don't autocomplete if text is too short or placeholder is active
+                if hasattr(entry, 'placeholder_active') and entry.placeholder_active:
+                    return
+                if len(current_text) < 3:
+                    return
 
-                    # Only update if it's significantly different and better
-                    if len(best_suggestion) > len(current_text):
-                        entry.delete(0, tk.END)
-                        entry.insert(0, best_suggestion)
-                        entry.selection_range(len(current_text), tk.END)
+                # Find the best suggestion that starts with or contains the current text
+                best_suggestion = None
+                for suggestion in suggestions:
+                    # Clean the suggestion by removing country suffix
+                    clean_suggestion = suggestion
+
+                    # Remove various country suffixes
+                    country_suffixes = [", USA", ", Mexico", ", Guatemala", ", El Salvador", ", Honduras", ", Bolivia"]
+                    for suffix in country_suffixes:
+                        if suffix in clean_suggestion:
+                            clean_suggestion = clean_suggestion.split(suffix)[0]
+
+                    # Check if this suggestion is relevant to what user typed
+                    if (current_text.lower() in clean_suggestion.lower() or
+                        clean_suggestion.lower().startswith(current_text.lower())):
+                        best_suggestion = clean_suggestion
+                        break
+
+                # Only suggest if we found a good match and it's significantly longer
+                if (best_suggestion and
+                    len(best_suggestion) > len(current_text) + 5 and  # At least 5 chars longer
+                    not best_suggestion.lower() == current_text.lower()):
+
+                    # Don't replace if the suggestion is just a country name
+                    country_names = ["USA", "United States", "Mexico", "Guatemala", "El Salvador", "Honduras", "Bolivia"]
+                    if any(country.lower() in best_suggestion.lower() and len(best_suggestion) < 30 for country in country_names):
+                        return
+
+                    # Suggest completion by extending current text
+                    entry.delete(0, tk.END)
+                    entry.insert(0, best_suggestion)
+                    entry.selection_range(len(current_text), tk.END)
 
         except Exception as e:
             print(f"Error showing suggestions: {e}")
