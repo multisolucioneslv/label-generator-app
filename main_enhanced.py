@@ -661,83 +661,107 @@ class LabelGeneratorApp:
             error_label.pack()
 
     def _create_labels_table(self, parent):
-        """Crear tabla de etiquetas"""
+        """Crear tabla de etiquetas mejorada con búsqueda y paginación"""
         table_title = tk.Label(parent, text="📋 Listado de Etiquetas",
                              font=("Segoe UI", 14, "bold"), bg="white", fg="#2c3e50")
         table_title.pack(pady=10)
 
+        # Frame para búsqueda
+        search_frame = tk.Frame(parent, bg="white")
+        search_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        search_label = tk.Label(search_frame, text="🔍 Buscar:",
+                               bg="white", fg="#5f6368", font=("Segoe UI", 10, "bold"))
+        search_label.pack(side="left", padx=(0, 10))
+
+        self.search_var = tk.StringVar()
+        search_entry = tk.Entry(search_frame, textvariable=self.search_var,
+                               font=("Segoe UI", 11), width=30, relief="solid", bd=1)
+        search_entry.pack(side="left", padx=(0, 10), ipady=5)
+        self.add_placeholder(search_entry, "Buscar por remitente o destinatario...")
+
+        search_btn = tk.Button(search_frame, text="Buscar", bg="#2196F3", fg="white",
+                              relief="flat", font=("Segoe UI", 10), padx=15, pady=5,
+                              command=self._search_labels)
+        search_btn.pack(side="left", padx=5)
+
+        clear_btn = tk.Button(search_frame, text="Limpiar", bg="#757575", fg="white",
+                             relief="flat", font=("Segoe UI", 10), padx=15, pady=5,
+                             command=self._clear_search)
+        clear_btn.pack(side="left", padx=5)
+
         # Frame con scroll para la tabla
         scroll_frame = tk.Frame(parent, bg="white")
-        scroll_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        scroll_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
 
         # Crear Treeview para la tabla
         columns = ("ID", "Fecha", "Remitente", "Destinatario", "Ciudad Origen", "Ciudad Destino", "Tracking", "Estado")
-        tree = ttk.Treeview(scroll_frame, columns=columns, show="headings", height=12)
+        self.labels_tree = ttk.Treeview(scroll_frame, columns=columns, show="headings", height=10)
 
         # Configurar columnas
-        tree.heading("ID", text="ID")
-        tree.heading("Fecha", text="Fecha")
-        tree.heading("Remitente", text="Remitente")
-        tree.heading("Destinatario", text="Destinatario")
-        tree.heading("Ciudad Origen", text="Ciudad Origen")
-        tree.heading("Ciudad Destino", text="Ciudad Destino")
-        tree.heading("Tracking", text="Tracking")
-        tree.heading("Estado", text="Estado")
+        self.labels_tree.heading("ID", text="ID")
+        self.labels_tree.heading("Fecha", text="Fecha")
+        self.labels_tree.heading("Remitente", text="Remitente")
+        self.labels_tree.heading("Destinatario", text="Destinatario")
+        self.labels_tree.heading("Ciudad Origen", text="Ciudad Origen")
+        self.labels_tree.heading("Ciudad Destino", text="Ciudad Destino")
+        self.labels_tree.heading("Tracking", text="Tracking")
+        self.labels_tree.heading("Estado", text="Estado")
 
         # Configurar anchos de columnas
-        tree.column("ID", width=50)
-        tree.column("Fecha", width=100)
-        tree.column("Remitente", width=150)
-        tree.column("Destinatario", width=150)
-        tree.column("Ciudad Origen", width=120)
-        tree.column("Ciudad Destino", width=120)
-        tree.column("Tracking", width=120)
-        tree.column("Estado", width=80)
+        self.labels_tree.column("ID", width=50)
+        self.labels_tree.column("Fecha", width=100)
+        self.labels_tree.column("Remitente", width=150)
+        self.labels_tree.column("Destinatario", width=150)
+        self.labels_tree.column("Ciudad Origen", width=120)
+        self.labels_tree.column("Ciudad Destino", width=120)
+        self.labels_tree.column("Tracking", width=120)
+        self.labels_tree.column("Estado", width=80)
 
         # Scrollbar para la tabla
-        scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=self.labels_tree.yview)
+        self.labels_tree.configure(yscrollcommand=scrollbar.set)
 
-        # Cargar datos
-        try:
-            session = db_manager.get_session()
-            if session:
-                labels = session.query(Label).order_by(Label.created_at.desc()).all()
-
-                for label in labels:
-                    # Formatear fecha
-                    fecha = label.created_at.strftime("%d/%m/%Y") if label.created_at else "N/A"
-
-                    # Insertar fila
-                    tree.insert("", "end", values=(
-                        label.id,
-                        fecha,
-                        label.sender_name,
-                        label.recipient_name,
-                        label.sender_city,
-                        label.recipient_city,
-                        label.recipient_tracking if label.recipient_tracking else "Sin tracking",
-                        label.status.title()
-                    ))
-
-                session.close()
-
-        except Exception as e:
-            # Mostrar error en la tabla
-            tree.insert("", "end", values=("Error", str(e), "", "", "", "", "", ""))
+        # Event binding para tracking links
+        self.labels_tree.bind("<Double-1>", self._on_item_double_click)
 
         # Empaquetar elementos
-        tree.pack(side="left", fill="both", expand=True)
+        self.labels_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Botones de acción
+        # Frame para paginación
+        pagination_frame = tk.Frame(parent, bg="white")
+        pagination_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        # Inicializar variables de paginación
+        self.current_page = 1
+        self.items_per_page = 10
+        self.total_pages = 1
+        self.search_query = ""
+
+        # Controles de paginación
+        self.prev_btn = tk.Button(pagination_frame, text="◀ Anterior", bg="#757575", fg="white",
+                                 relief="flat", font=("Segoe UI", 10), padx=15, pady=5,
+                                 command=self._prev_page, state="disabled")
+        self.prev_btn.pack(side="left", padx=5)
+
+        self.page_label = tk.Label(pagination_frame, text="Página 1 de 1",
+                                  bg="white", fg="#2c3e50", font=("Segoe UI", 10, "bold"))
+        self.page_label.pack(side="left", padx=20)
+
+        self.next_btn = tk.Button(pagination_frame, text="Siguiente ▶", bg="#757575", fg="white",
+                                 relief="flat", font=("Segoe UI", 10), padx=15, pady=5,
+                                 command=self._next_page, state="disabled")
+        self.next_btn.pack(side="left", padx=5)
+
+        # Frame para botones de acción
         actions_frame = tk.Frame(parent, bg="white")
         actions_frame.pack(fill="x", padx=20, pady=10)
 
         refresh_btn = tk.Button(actions_frame, text="🔄 Actualizar",
                               bg="#4CAF50", fg="white", relief="flat",
                               font=("Segoe UI", 10), padx=15, pady=5,
-                              command=self.show_historial)
+                              command=self._refresh_table)
         refresh_btn.pack(side="left", padx=5)
 
         export_btn = tk.Button(actions_frame, text="📊 Exportar",
@@ -745,6 +769,204 @@ class LabelGeneratorApp:
                              font=("Segoe UI", 10), padx=15, pady=5,
                              command=self._export_labels)
         export_btn.pack(side="left", padx=5)
+
+        status_btn = tk.Button(actions_frame, text="📦 Actualizar Estados",
+                              bg="#FF9800", fg="white", relief="flat",
+                              font=("Segoe UI", 10), padx=15, pady=5,
+                              command=self._update_all_status)
+        status_btn.pack(side="left", padx=5)
+
+        # Cargar datos inicial
+        self._load_labels_data()
+
+    def _load_labels_data(self):
+        """Cargar datos de etiquetas con paginación y búsqueda"""
+        try:
+            # Limpiar tabla
+            for item in self.labels_tree.get_children():
+                self.labels_tree.delete(item)
+
+            session = db_manager.get_session()
+            if not session:
+                return
+
+            # Base query
+            query = session.query(Label)
+
+            # Aplicar filtro de búsqueda
+            if self.search_query:
+                query = query.filter(
+                    (Label.sender_name.contains(self.search_query)) |
+                    (Label.recipient_name.contains(self.search_query))
+                )
+
+            # Contar total de registros
+            total_records = query.count()
+            self.total_pages = max(1, (total_records + self.items_per_page - 1) // self.items_per_page)
+
+            # Aplicar paginación
+            offset = (self.current_page - 1) * self.items_per_page
+            labels = query.order_by(Label.created_at.desc()).offset(offset).limit(self.items_per_page).all()
+
+            # Cargar datos en la tabla
+            for label in labels:
+                fecha = label.created_at.strftime("%d/%m/%Y") if label.created_at else "N/A"
+                tracking_display = label.recipient_tracking if label.recipient_tracking else "Sin tracking"
+
+                # Formatear estado con color
+                status_display = self._get_status_display(label.status)
+
+                self.labels_tree.insert("", "end", values=(
+                    label.id,
+                    fecha,
+                    label.sender_name,
+                    label.recipient_name,
+                    label.sender_city,
+                    label.recipient_city,
+                    tracking_display,
+                    status_display
+                ), tags=(f"tracking_{label.recipient_tracking}",))
+
+            session.close()
+
+            # Actualizar controles de paginación
+            self._update_pagination_controls()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Error cargando datos: {str(e)}")
+
+    def _get_status_display(self, status):
+        """Formatear estado para visualización"""
+        status_map = {
+            'generated': 'Generado',
+            'printed': 'Impreso',
+            'shipped': 'Enviado',
+            'in_transit': 'En tránsito',
+            'delivered': 'Entregado',
+            'returned': 'Devuelto',
+            'exception': 'Excepción'
+        }
+        return status_map.get(status.lower(), status.title())
+
+    def _update_pagination_controls(self):
+        """Actualizar controles de paginación"""
+        self.page_label.config(text=f"Página {self.current_page} de {self.total_pages}")
+
+        # Habilitar/deshabilitar botones
+        if self.current_page > 1:
+            self.prev_btn.config(state="normal", bg="#2196F3")
+        else:
+            self.prev_btn.config(state="disabled", bg="#757575")
+
+        if self.current_page < self.total_pages:
+            self.next_btn.config(state="normal", bg="#2196F3")
+        else:
+            self.next_btn.config(state="disabled", bg="#757575")
+
+    def _search_labels(self):
+        """Buscar etiquetas por nombre"""
+        self.search_query = self.search_var.get().strip()
+        self.current_page = 1  # Resetear a primera página
+        self._load_labels_data()
+
+    def _clear_search(self):
+        """Limpiar búsqueda"""
+        self.search_var.set("")
+        self.search_query = ""
+        self.current_page = 1
+        self._load_labels_data()
+
+    def _prev_page(self):
+        """Ir a página anterior"""
+        if self.current_page > 1:
+            self.current_page -= 1
+            self._load_labels_data()
+
+    def _next_page(self):
+        """Ir a página siguiente"""
+        if self.current_page < self.total_pages:
+            self.current_page += 1
+            self._load_labels_data()
+
+    def _refresh_table(self):
+        """Refrescar tabla manteniendo filtros"""
+        self._load_labels_data()
+
+    def _on_item_double_click(self, event):
+        """Manejar doble clic en items de la tabla"""
+        selection = self.labels_tree.selection()
+        if selection:
+            item = self.labels_tree.item(selection[0])
+            values = item['values']
+
+            if len(values) >= 7:
+                tracking_number = values[6]  # Columna tracking
+
+                if tracking_number and tracking_number != "Sin tracking":
+                    self._open_usps_tracking(tracking_number)
+
+    def _open_usps_tracking(self, tracking_number):
+        """Abrir link de tracking de USPS"""
+        try:
+            import webbrowser
+            usps_url = f"https://tools.usps.com/go/TrackConfirmAction?tLabels={tracking_number}"
+            webbrowser.open(usps_url)
+            print(f"Abriendo tracking USPS para: {tracking_number}")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir el link de tracking: {str(e)}")
+
+    def _update_all_status(self):
+        """Actualizar estados de todas las etiquetas con tracking"""
+        try:
+            session = db_manager.get_session()
+            if not session:
+                return
+
+            # Obtener etiquetas con tracking
+            labels_with_tracking = session.query(Label).filter(
+                Label.recipient_tracking != "",
+                Label.recipient_tracking.isnot(None)
+            ).all()
+
+            if not labels_with_tracking:
+                messagebox.showinfo("Información", "No hay etiquetas con número de tracking para actualizar.")
+                session.close()
+                return
+
+            updated_count = 0
+            for label in labels_with_tracking:
+                # Simular actualización de estado (aquí podrías integrar con API real de USPS)
+                new_status = self._simulate_tracking_status(label.recipient_tracking)
+                if new_status != label.status:
+                    label.status = new_status
+                    updated_count += 1
+
+            session.commit()
+            session.close()
+
+            messagebox.showinfo("Éxito", f"Se actualizaron {updated_count} estados de etiquetas.")
+            self._refresh_table()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Error actualizando estados: {str(e)}")
+
+    def _simulate_tracking_status(self, tracking_number):
+        """Simular estado de tracking (en producción conectar con API real)"""
+        import random
+
+        # Simular diferentes estados basado en el tracking number
+        hash_value = hash(tracking_number) % 100
+
+        if hash_value < 20:
+            return "shipped"
+        elif hash_value < 50:
+            return "in_transit"
+        elif hash_value < 75:
+            return "delivered"
+        elif hash_value < 90:
+            return "generated"
+        else:
+            return "exception"
 
     def _export_labels(self):
         """Exportar etiquetas a CSV"""
