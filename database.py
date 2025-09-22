@@ -125,11 +125,11 @@ class DatabaseManager:
             Base.metadata.create_all(bind=self.engine)
 
             self.connected = True
-            print(f"✅ Connected to MySQL database: {config.DB_NAME}")
+            print(f"Connected to MySQL database: {config.DB_NAME}")
             return True
 
         except Exception as e:
-            print(f"❌ Database connection failed: {str(e)}")
+            print(f"Database connection failed: {str(e)}")
             self.connected = False
             return False
 
@@ -160,13 +160,13 @@ class DatabaseManager:
                 admin.set_password('123')  # Default password
                 session.add(admin)
                 session.commit()
-                print("✅ Default admin user created (username: admin, password: 123)")
+                print("Default admin user created (username: admin, password: 123)")
 
             session.close()
             return True
 
         except Exception as e:
-            print(f"❌ Error creating admin user: {str(e)}")
+            print(f"Error creating admin user: {str(e)}")
             return False
 
     def get_setting(self, key, default=None):
@@ -182,7 +182,7 @@ class DatabaseManager:
             return setting.setting_value if setting else default
 
         except Exception as e:
-            print(f"❌ Error getting setting {key}: {str(e)}")
+            print(f"Error getting setting {key}: {str(e)}")
             return default
 
     def set_setting(self, key, value, description=None):
@@ -210,7 +210,7 @@ class DatabaseManager:
             return True
 
         except Exception as e:
-            print(f"❌ Error setting {key}: {str(e)}")
+            print(f"Error setting {key}: {str(e)}")
             return False
 
 # Global database manager instance

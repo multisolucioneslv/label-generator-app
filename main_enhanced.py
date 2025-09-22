@@ -50,10 +50,30 @@ class LabelGeneratorApp:
         """Initialize Google Maps API client"""
         try:
             api_key = config.GOOGLE_API_KEY
-            if api_key and config.GOOGLE_API_ENABLED:
+            if api_key:
                 self.gmaps = googlemaps.Client(key=api_key)
+                # Test API with a simple geocoding request to verify it works
+                try:
+                    # Simple test to verify API works
+                    test_result = self.gmaps.geocode("Mexico City", language='es')
+                    if test_result:
+                        print("Google Maps API initialized successfully")
+                        config.GOOGLE_API_ENABLED = True
+                    else:
+                        print("Google Maps API test failed - no results")
+                        self.gmaps = None
+                        config.GOOGLE_API_ENABLED = False
+                except Exception as api_error:
+                    print(f"Google Maps API test failed: {str(api_error)}")
+                    self.gmaps = None
+                    config.GOOGLE_API_ENABLED = False
+            else:
+                self.gmaps = None
+                config.GOOGLE_API_ENABLED = False
         except Exception as e:
             print(f"Google Maps API initialization failed: {str(e)}")
+            self.gmaps = None
+            config.GOOGLE_API_ENABLED = False
 
     def center_window(self):
         """Centrar ventana en la pantalla"""
@@ -98,6 +118,10 @@ class LabelGeneratorApp:
                                   command=self.show_admin)
         self.btn_admin.pack(side="left", padx=10, pady=10)
 
+        self.btn_historial = tk.Button(header_frame, text="📊 Historial", **self.btn_style_normal,
+                                      command=self.show_historial)
+        self.btn_historial.pack(side="left", padx=10, pady=10)
+
     def create_main_frame(self):
         """Crear frame principal para contenido"""
         self.main_frame = tk.Frame(self.root, bg="#f0f4f8")
@@ -108,7 +132,8 @@ class LabelGeneratorApp:
         buttons = {
             "inicio": self.btn_inicio,
             "config": self.btn_config,
-            "admin": self.btn_admin
+            "admin": self.btn_admin,
+            "historial": self.btn_historial
         }
 
         for view, button in buttons.items():
@@ -294,22 +319,66 @@ class LabelGeneratorApp:
     def fetch_suggestions(self, entry, query):
         """Fetch address suggestions from Google Places API"""
         try:
-            if self.gmaps:
-                predictions = self.gmaps.places_autocomplete(
-                    input_text=query,
-                    types=['address'],
-                    language='es',
-                    components={'country': 'mx'}  # Restrict to Mexico
-                )
+            if self.gmaps and config.GOOGLE_API_ENABLED:
+                # Use geocoding API which is more reliable than places_autocomplete
+                try:
+                    # First try with geocoding for better compatibility
+                    results = self.gmaps.geocode(
+                        address=query + ", Mexico",
+                        language='es',
+                        region='mx'
+                    )
 
-                # For now, just print suggestions (could implement dropdown later)
-                if predictions:
-                    print(f"Suggestions for '{query}':")
-                    for prediction in predictions[:3]:
-                        print(f"  - {prediction['description']}")
+                    if results:
+                        suggestions = []
+                        for result in results[:5]:  # Limit to 5 suggestions
+                            formatted_address = result.get('formatted_address', '')
+                            if formatted_address:
+                                suggestions.append(formatted_address)
+
+                        if suggestions:
+                            print(f"Sugerencias para '{query}':")
+                            for i, suggestion in enumerate(suggestions, 1):
+                                print(f"  {i}. {suggestion}")
+
+                            # Show suggestions in a simple way for now
+                            self.show_address_suggestions(entry, suggestions)
+
+                except Exception as api_error:
+                    if "REQUEST_DENIED" in str(api_error):
+                        print("Google API Error: Verifica tu API Key y configuración")
+                        print("Asegúrate de haber habilitado Geocoding API")
+                    elif "OVER_QUERY_LIMIT" in str(api_error):
+                        print("Límite de consultas excedido")
+                    else:
+                        print(f"Error de API: {api_error}")
 
         except Exception as e:
-            print(f"Error fetching suggestions: {str(e)}")
+            print(f"Error general: {str(e)}")
+
+    def show_address_suggestions(self, entry, suggestions):
+        """Show address suggestions in a simple dropdown-like manner"""
+        try:
+            # For now, we'll use the first suggestion to auto-fill
+            if suggestions and len(suggestions) > 0:
+                # Clear current text and insert first suggestion
+                current_text = entry.get()
+                if not entry.placeholder_active and len(current_text) > 3:
+                    # Use the most relevant suggestion
+                    best_suggestion = suggestions[0]
+
+                    # Extract just the main address part (before the country)
+                    if ", Mexico" in best_suggestion:
+                        best_suggestion = best_suggestion.split(", Mexico")[0]
+
+                    # Only update if it's significantly different and better
+                    if len(best_suggestion) > len(current_text):
+                        entry.delete(0, tk.END)
+                        entry.insert(0, best_suggestion)
+                        entry.selection_range(len(current_text), tk.END)
+
+        except Exception as e:
+            print(f"Error showing suggestions: {e}")
 
     def add_placeholder(self, entry, placeholder_text):
         """Agregar placeholder animado a un Entry"""
@@ -334,6 +403,237 @@ class LabelGeneratorApp:
         # Configurar placeholder inicial
         entry.insert(0, placeholder_text)
         entry.config(fg='#a0a0a0')
+
+    def show_historial(self):
+        """Mostrar vista de historial de etiquetas"""
+        self.current_view = "historial"
+        self.update_header_buttons("historial")
+        self.clear_main_frame()
+
+        # Container principal
+        historial_container = tk.Frame(self.main_frame, bg="#f0f4f8")
+        historial_container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Título
+        title_label = tk.Label(historial_container, text="📊 Historial de Etiquetas",
+                              font=("Segoe UI", 24, "bold"), bg="#f0f4f8", fg="#2c3e50")
+        title_label.pack(pady=(0, 20))
+
+        # Frame para filtros
+        filters_frame = tk.Frame(historial_container, bg="white", relief="solid", bd=1)
+        filters_frame.pack(fill="x", pady=(0, 20))
+
+        filters_title = tk.Label(filters_frame, text="🔍 Filtros",
+                               font=("Segoe UI", 12, "bold"), bg="white", fg="#5f6368")
+        filters_title.pack(pady=10)
+
+        # Frame para estadísticas
+        stats_frame = tk.Frame(historial_container, bg="white", relief="solid", bd=1)
+        stats_frame.pack(fill="x", pady=(0, 20))
+
+        self._create_stats_section(stats_frame)
+
+        # Frame para tabla de etiquetas
+        table_frame = tk.Frame(historial_container, bg="white", relief="solid", bd=1)
+        table_frame.pack(fill="both", expand=True)
+
+        self._create_labels_table(table_frame)
+
+    def _create_stats_section(self, parent):
+        """Crear sección de estadísticas"""
+        stats_title = tk.Label(parent, text="📈 Estadísticas",
+                             font=("Segoe UI", 14, "bold"), bg="white", fg="#2c3e50")
+        stats_title.pack(pady=10)
+
+        stats_container = tk.Frame(parent, bg="white")
+        stats_container.pack(fill="x", padx=20, pady=(0, 20))
+
+        try:
+            session = db_manager.get_session()
+            if session:
+                # Obtener estadísticas
+                total_labels = session.query(Label).count()
+                today_labels = session.query(Label).filter(
+                    Label.created_at >= datetime.now().strftime('%Y-%m-%d')
+                ).count()
+                with_tracking = session.query(Label).filter(
+                    Label.recipient_tracking != ''
+                ).count()
+
+                # Crear cards de estadísticas
+                stats_data = [
+                    ("Total Etiquetas", str(total_labels), "#4CAF50"),
+                    ("Hoy", str(today_labels), "#2196F3"),
+                    ("Con Tracking", str(with_tracking), "#FF9800"),
+                    ("Sin Tracking", str(total_labels - with_tracking), "#9E9E9E")
+                ]
+
+                for i, (label, value, color) in enumerate(stats_data):
+                    stat_card = tk.Frame(stats_container, bg=color, width=120, height=80)
+                    stat_card.pack(side="left", padx=10, fill="y")
+                    stat_card.pack_propagate(False)
+
+                    value_label = tk.Label(stat_card, text=value,
+                                         font=("Segoe UI", 18, "bold"), bg=color, fg="white")
+                    value_label.pack(pady=(15, 5))
+
+                    desc_label = tk.Label(stat_card, text=label,
+                                        font=("Segoe UI", 10), bg=color, fg="white")
+                    desc_label.pack()
+
+                session.close()
+
+        except Exception as e:
+            error_label = tk.Label(stats_container, text=f"Error cargando estadísticas: {str(e)}",
+                                 bg="white", fg="red")
+            error_label.pack()
+
+    def _create_labels_table(self, parent):
+        """Crear tabla de etiquetas"""
+        table_title = tk.Label(parent, text="📋 Listado de Etiquetas",
+                             font=("Segoe UI", 14, "bold"), bg="white", fg="#2c3e50")
+        table_title.pack(pady=10)
+
+        # Frame con scroll para la tabla
+        scroll_frame = tk.Frame(parent, bg="white")
+        scroll_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        # Crear Treeview para la tabla
+        columns = ("ID", "Fecha", "Remitente", "Destinatario", "Ciudad Origen", "Ciudad Destino", "Tracking", "Estado")
+        tree = ttk.Treeview(scroll_frame, columns=columns, show="headings", height=12)
+
+        # Configurar columnas
+        tree.heading("ID", text="ID")
+        tree.heading("Fecha", text="Fecha")
+        tree.heading("Remitente", text="Remitente")
+        tree.heading("Destinatario", text="Destinatario")
+        tree.heading("Ciudad Origen", text="Ciudad Origen")
+        tree.heading("Ciudad Destino", text="Ciudad Destino")
+        tree.heading("Tracking", text="Tracking")
+        tree.heading("Estado", text="Estado")
+
+        # Configurar anchos de columnas
+        tree.column("ID", width=50)
+        tree.column("Fecha", width=100)
+        tree.column("Remitente", width=150)
+        tree.column("Destinatario", width=150)
+        tree.column("Ciudad Origen", width=120)
+        tree.column("Ciudad Destino", width=120)
+        tree.column("Tracking", width=120)
+        tree.column("Estado", width=80)
+
+        # Scrollbar para la tabla
+        scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        # Cargar datos
+        try:
+            session = db_manager.get_session()
+            if session:
+                labels = session.query(Label).order_by(Label.created_at.desc()).all()
+
+                for label in labels:
+                    # Formatear fecha
+                    fecha = label.created_at.strftime("%d/%m/%Y") if label.created_at else "N/A"
+
+                    # Insertar fila
+                    tree.insert("", "end", values=(
+                        label.id,
+                        fecha,
+                        label.sender_name,
+                        label.recipient_name,
+                        label.sender_city,
+                        label.recipient_city,
+                        label.recipient_tracking if label.recipient_tracking else "Sin tracking",
+                        label.status.title()
+                    ))
+
+                session.close()
+
+        except Exception as e:
+            # Mostrar error en la tabla
+            tree.insert("", "end", values=("Error", str(e), "", "", "", "", "", ""))
+
+        # Empaquetar elementos
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Botones de acción
+        actions_frame = tk.Frame(parent, bg="white")
+        actions_frame.pack(fill="x", padx=20, pady=10)
+
+        refresh_btn = tk.Button(actions_frame, text="🔄 Actualizar",
+                              bg="#4CAF50", fg="white", relief="flat",
+                              font=("Segoe UI", 10), padx=15, pady=5,
+                              command=self.show_historial)
+        refresh_btn.pack(side="left", padx=5)
+
+        export_btn = tk.Button(actions_frame, text="📊 Exportar",
+                             bg="#2196F3", fg="white", relief="flat",
+                             font=("Segoe UI", 10), padx=15, pady=5,
+                             command=self._export_labels)
+        export_btn.pack(side="left", padx=5)
+
+    def _export_labels(self):
+        """Exportar etiquetas a CSV"""
+        try:
+            import csv
+            from tkinter import filedialog
+            from datetime import datetime
+
+            # Obtener datos
+            session = db_manager.get_session()
+            if not session:
+                messagebox.showerror("Error", "No se pudo conectar a la base de datos")
+                return
+
+            labels = session.query(Label).order_by(Label.created_at.desc()).all()
+
+            if not labels:
+                messagebox.showwarning("Advertencia", "No hay etiquetas para exportar")
+                session.close()
+                return
+
+            # Seleccionar archivo
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                title="Guardar reporte de etiquetas",
+                initialname=f"etiquetas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+
+            if filename:
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+
+                    # Header
+                    writer.writerow([
+                        'ID', 'Fecha', 'Remitente', 'Direccion Remitente', 'Ciudad Remitente',
+                        'Destinatario', 'Direccion Destinatario', 'Ciudad Destinatario',
+                        'Tracking', 'Estado'
+                    ])
+
+                    # Datos
+                    for label in labels:
+                        writer.writerow([
+                            label.id,
+                            label.created_at.strftime("%d/%m/%Y %H:%M") if label.created_at else "",
+                            label.sender_name,
+                            label.sender_address,
+                            f"{label.sender_city}, {label.sender_state}",
+                            label.recipient_name,
+                            label.recipient_address,
+                            f"{label.recipient_city}, {label.recipient_state}",
+                            label.recipient_tracking or "Sin tracking",
+                            label.status
+                        ])
+
+                messagebox.showinfo("Éxito", f"Reporte exportado exitosamente a:\n{filename}")
+
+            session.close()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al exportar: {str(e)}")
 
     def show_config(self):
         """Mostrar vista de configuración"""
@@ -482,9 +782,27 @@ class LabelGeneratorApp:
             # Update config and reinitialize
             config.GOOGLE_API_KEY = api_key
             config.GOOGLE_API_ENABLED = api_enabled
+
+            # Reinitialize Google Maps
             self.init_google_maps()
 
-            messagebox.showinfo("Éxito", "Configuración de API guardada correctamente")
+            # Test the API immediately
+            if self.gmaps and api_enabled:
+                try:
+                    test_result = self.gmaps.geocode("Ciudad de Mexico", language='es')
+                    if test_result:
+                        messagebox.showinfo("Éxito",
+                                          "Configuración de API guardada correctamente.\n"
+                                          "API Key verificada y funcionando.")
+                    else:
+                        messagebox.showwarning("Advertencia",
+                                             "API Key guardada pero no se pudieron obtener resultados de prueba.")
+                except Exception as test_error:
+                    messagebox.showerror("Error de API",
+                                       f"API Key guardada pero falló la prueba:\n{str(test_error)}\n\n"
+                                       "Verifica que hayas habilitado Geocoding API en Google Cloud Console.")
+            else:
+                messagebox.showinfo("Información", "Configuración guardada. API deshabilitada.")
 
         except Exception as e:
             messagebox.showerror("Error", f"Error al guardar configuración: {str(e)}")
