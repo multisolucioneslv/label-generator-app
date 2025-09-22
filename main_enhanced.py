@@ -110,9 +110,6 @@ class LabelGeneratorApp:
                                    command=self.show_inicio)
         self.btn_inicio.pack(side="left", padx=10, pady=10)
 
-        self.btn_config = tk.Button(header_frame, text="⚙️ Configuración", **self.btn_style_normal,
-                                   command=self.show_config)
-        self.btn_config.pack(side="left", padx=10, pady=10)
 
         self.btn_admin = tk.Button(header_frame, text="👨‍💼 Administración", **self.btn_style_normal,
                                   command=self.show_admin)
@@ -131,7 +128,6 @@ class LabelGeneratorApp:
         """Actualizar estilo de botones según vista activa"""
         buttons = {
             "inicio": self.btn_inicio,
-            "config": self.btn_config,
             "admin": self.btn_admin,
             "historial": self.btn_historial
         }
@@ -320,13 +316,17 @@ class LabelGeneratorApp:
         """Fetch address suggestions from Google Places API"""
         try:
             if self.gmaps and config.GOOGLE_API_ENABLED:
+                # Get selected country
+                country_name = db_manager.get_setting('default_country', 'USA')
+                country_code = self.get_country_code(country_name)
+
                 # Use geocoding API which is more reliable than places_autocomplete
                 try:
                     # First try with geocoding for better compatibility
                     results = self.gmaps.geocode(
-                        address=query + ", Mexico",
+                        address=query + f", {country_name}",
                         language='es',
-                        region='mx'
+                        region=country_code
                     )
 
                     if results:
@@ -635,19 +635,6 @@ class LabelGeneratorApp:
         except Exception as e:
             messagebox.showerror("Error", f"Error al exportar: {str(e)}")
 
-    def show_config(self):
-        """Mostrar vista de configuración"""
-        self.current_view = "config"
-        self.update_header_buttons("config")
-        self.clear_main_frame()
-
-        config_label = tk.Label(self.main_frame, text="⚙️ Configuración",
-                               font=("Segoe UI", 24), bg="#f0f4f8", fg="#2c3e50")
-        config_label.pack(expand=True)
-
-        info_label = tk.Label(self.main_frame, text="Esta sección estará disponible próximamente",
-                             font=("Segoe UI", 12), bg="#f0f4f8", fg="#7f8c8d")
-        info_label.pack()
 
     def show_admin(self):
         """Mostrar vista de administración con autenticación"""
@@ -673,6 +660,9 @@ class LabelGeneratorApp:
 
             # Google API Configuration Card
             self.create_google_api_card(options_frame)
+
+            # Country Configuration Card
+            self.create_country_config_card(options_frame)
 
             # User Registration Card
             self.create_user_registration_card(options_frame)
@@ -727,6 +717,56 @@ class LabelGeneratorApp:
         # Load current settings
         self.load_api_settings()
 
+    def create_country_config_card(self, parent):
+        """Create country configuration card"""
+        country_card = tk.Frame(parent, bg="white", relief="solid", bd=1)
+        country_card.pack(fill="x", pady=(0, 20))
+
+        # Header
+        country_header = tk.Frame(country_card, bg="#17a2b8", height=40)
+        country_header.pack(fill="x")
+        country_header.pack_propagate(False)
+
+        country_title = tk.Label(country_header, text="🌎 Configuración de País",
+                                font=("Segoe UI", 14, "bold"), bg="#17a2b8", fg="white")
+        country_title.pack(pady=10)
+
+        # Content
+        country_content = tk.Frame(country_card, bg="white")
+        country_content.pack(fill="x", padx=20, pady=20)
+
+        # Country selection
+        country_label = tk.Label(country_content, text="País predeterminado para direcciones:",
+                                bg="white", fg="#5f6368", font=("Segoe UI", 10, "bold"))
+        country_label.pack(anchor="w", pady=(0, 5))
+
+        # Country dropdown
+        self.country_var = tk.StringVar()
+        self.country_options = [
+            "USA", "Mexico", "Guatemala", "El Salvador", "Honduras", "Bolivia"
+        ]
+
+        country_combo = ttk.Combobox(country_content, textvariable=self.country_var,
+                                   values=self.country_options, state="readonly",
+                                   font=("Segoe UI", 11))
+        country_combo.pack(fill="x", ipady=8, pady=(0, 15))
+
+        # Info label
+        info_label = tk.Label(country_content,
+                            text="Este país se utilizará para el autocompletado de direcciones.",
+                            bg="white", fg="#6c757d", font=("Segoe UI", 9))
+        info_label.pack(anchor="w", pady=(0, 15))
+
+        # Save button
+        save_country_btn = tk.Button(country_content, text="Guardar País",
+                                   bg="#17a2b8", fg="white", relief="flat",
+                                   font=("Segoe UI", 10), padx=20, pady=5,
+                                   command=self.save_country_config)
+        save_country_btn.pack()
+
+        # Load current country
+        self.load_country_settings()
+
     def create_user_registration_card(self, parent):
         """Create user registration card"""
         user_card = tk.Frame(parent, bg="white", relief="solid", bd=1)
@@ -768,6 +808,48 @@ class LabelGeneratorApp:
             self.api_enabled_var.set(api_enabled)
         except:
             pass
+
+    def load_country_settings(self):
+        """Load current country settings"""
+        try:
+            current_country = db_manager.get_setting('default_country', 'USA')
+            if current_country in self.country_options:
+                self.country_var.set(current_country)
+            else:
+                self.country_var.set('USA')  # Default to USA
+        except:
+            self.country_var.set('USA')
+
+    def save_country_config(self):
+        """Save country configuration"""
+        try:
+            selected_country = self.country_var.get()
+
+            if not selected_country:
+                messagebox.showwarning("Advertencia", "Selecciona un país.")
+                return
+
+            # Save to database
+            db_manager.set_setting('default_country', selected_country)
+
+            messagebox.showinfo("Éxito",
+                              f"País configurado a {selected_country}.\n"
+                              "El autocompletado ahora usará este país.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al guardar país: {str(e)}")
+
+    def get_country_code(self, country_name):
+        """Get country code for Google API"""
+        country_codes = {
+            'USA': 'us',
+            'Mexico': 'mx',
+            'Guatemala': 'gt',
+            'El Salvador': 'sv',
+            'Honduras': 'hn',
+            'Bolivia': 'bo'
+        }
+        return country_codes.get(country_name, 'us')
 
     def save_api_config(self):
         """Save Google API configuration"""
